@@ -15,6 +15,7 @@
 #include <linux/kernel.h>
 #include <linux/sched.h>
 
+#define eprintk(format, ...) printk(KERN_NOTICE format, ## __VA_ARGS__)
 /****************************************************************************
  * ospfsmod
  *
@@ -447,14 +448,15 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 	while (r == 0 && ok_so_far >= 0 && f_pos >= 2) {
 		ospfs_direntry_t *od;
 		ospfs_inode_t *entry_oi;
-
 		/* If at the end of the directory, set 'r' to 1 and exit
 		 * the loop.  For now we do this all the time.
 		 *
 		 * EXERCISE: Your code here */
-		r = 1;		/* Fix me! */
-		break;		/* Fix me! */
 
+		if (!ospfs_inode_blockno(dir_oi,(f_pos - 2)*OSPFS_DIRENTRY_SIZE)){
+			r = 1;
+			break;
+		}
 		/* Get a pointer to the next entry (od) in the directory.
 		 * The file system interprets the contents of a
 		 * directory-file as a sequence of ospfs_direntry structures.
@@ -474,8 +476,31 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * your function should advance f_pos by the proper amount to
 		 * advance to the next directory entry.
 		 */
-
+		od = ospfs_inode_data(dir_oi, (f_pos - 2)*OSPFS_DIRENTRY_SIZE);		
+		while (od->od_ino == 0) { f_pos++; continue; }
 		/* EXERCISE: Your code here */
+		int ftype;
+		entry_oi = ospfs_inode(od->od_ino);
+		if (entry_oi){
+		switch (entry_oi->oi_ftype){
+			case OSPFS_FTYPE_REG:
+				ftype = DT_REG;
+			        break;
+			case OSPFS_FTYPE_DIR:
+				ftype = DT_DIR;
+				break;
+			case OSPFS_FTYPE_SYMLINK:
+				ftype = DT_LNK;
+				break;
+			default:
+				r = 1;
+				continue;
+		}
+		eprintk("RUN : %s\n", od->od_name);
+		ok_so_far = filldir(dirent, od->od_name , strlen(od->od_name), f_pos, filp->f_dentry->d_parent->d_inode->i_ino, ftype);}
+		if (ok_so_far >= 0) f_pos++;
+		else break;
+
 	}
 
 	// Save the file position and return!
@@ -767,16 +792,27 @@ change_size(ospfs_inode_t *oi, uint32_t new_size)
 {
 	uint32_t old_size = oi->oi_size;
 	int r = 0;
-
+	int t = 0;
 	while (ospfs_size2nblocks(oi->oi_size) < ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
-		return -EIO; // Replace this line
+		r = add_block(oi);
+		if (r == -ENOSPC) 
+		{
+			new_size = old_size;
+			break;
+		}
+		if (r == -EIO) return -EIO;
+		t++;
 	}
 	while (ospfs_size2nblocks(oi->oi_size) > ospfs_size2nblocks(new_size)) {
 	        /* EXERCISE: Your code here */
-		return -EIO; // Replace this line
+		r = remove_block(oi);
+		if (r == -EIO) return -EIO;
 	}
-
+	if (r == -ENOSPC)
+		while (t--!=0)
+			remove_block(oi);
+	return r;
 	/* EXERCISE: Make sure you update necessary file meta data
 	             and return the proper value. */
 	return -EIO; // Replace this line
@@ -1006,6 +1042,22 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 	// 2. If there's no empty entries, add a block to the directory.
 	//    Use ERR_PTR if this fails; otherwise, clear out all the directory
 	//    entries and return one of them.
+	uint32_t new_size;
+	ospfs_direntry_t *od;
+	int retval = 0;
+	int offset;
+	for (offset = 0; offset < dir_oi->oi_size; offset+=OSPFS_DIRENTRY_SIZE){
+	od = ospfs_inode_data(dir_oi, offset);
+	if (od->od_ino == 0) // failed a black dir entry
+		return od;
+	}
+	new_size = (ospfs_size2nblocks(dir_oi->oi_size) + 1) *OSPFS_BLKSIZE;
+	retval = change_size(dir_oi, new_size);
+	if (retval != 0 ){
+		return ERR_PTR(retval);
+	}
+	dir_oi->oi_size = new_size;
+	return ospfs_inode_data(dir_oi, offset);
 
 	/* EXERCISE: Your code here. */
 	return ERR_PTR(-EINVAL); // Replace this line
@@ -1041,9 +1093,18 @@ create_blank_direntry(ospfs_inode_t *dir_oi)
 //   EXERCISE: Complete this function.
 
 static int
-ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dentry) {
-	/* EXERCISE: Your code here. */
-	return -EINVAL;
+ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dentry)
+{	
+	if (dst_dentry->d_name.len > OSPFS_MAXNAMELEN) 
+		return -ENAMETOOLONG;	
+	if (find_direntry(ospfs_inode(dir->i_ino), dst_dentry->d_name.name,
+			      dst_dentry->d_name.len) != NULL) 
+		return -EEXIST;
+	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);	
+	ospfd_inode_t *src_inode = src_dentry->d_innode->i_ino;
+	ospfs_direntry_t *direntry = create_blank_direntry(dir_oi);
+	if (IS_ERR(direntry)) return PTR_ERR(direntry);
+
 }
 
 // ospfs_create

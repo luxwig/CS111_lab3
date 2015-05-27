@@ -475,7 +475,6 @@ ospfs_dir_readdir(struct file *filp, void *dirent, filldir_t filldir)
 		 * advance to the next directory entry.
 		 */
 
-		/* EXERCISE: Your code here */
 	}
 
 	// Save the file position and return!
@@ -521,6 +520,10 @@ ospfs_unlink(struct inode *dirino, struct dentry *dentry)
 
 	od->od_ino = 0;
 	oi->oi_nlink--;
+	
+	if (oi->oi_ftype != OSPFS_FTYPE_SYMLINK && oi->oi_nlink == 0)
+		change_size(oi,0);
+	
 	return 0;
 }
 
@@ -647,7 +650,7 @@ indir_index(uint32_t b)
 	else if ( b < OSPFS_NDIRECT + OSPFS_NINDIRECT)
 		return 0;
 	else
-		return b - OSPFS_NDIRECT - OSPFS_NINDIRECT;
+		return (b - OSPFS_NDIRECT - OSPFS_NINDIRECT)/OSPFS_NINDIRECT;
 }
 
 
@@ -709,35 +712,35 @@ add_block(ospfs_inode_t *oi)
 
 	// keep track of allocations to free in case of -ENOSPC
 	uint32_t *allocated[2] = { 0, 0 };
-	if (n < OSPFS_NDIRECT)
+	
+	if (n >= OSPFS_MAXFILEBLKS) return -ENOSPC;
+
+	uint32_t num = allocate_block();
+	if (num == 0)
+		 return -ENOSPC;
+	else
 	{
-		uint32_t num;
-		if ((num = allocate_block()) == 0)
-			return -ENOSPC;
-		else
-		{
-			oi_direct[n] = num;
-			void* newblk = ospfs_block(num);
-			memset(newblk,0,OSPFS_BLKSIZE);
-			oi->oi_size += OSPFS_BLKSIZE; 
-		}
+		void* newblk = ospfs_block(num);
+		memset(newblk,0,OSPFS_BLKSIZE);
 	}
-	else if ( n == OSPFS_NDIRECT)
+
+	if (indir_index(n) == -1)
+	{
+		oi->oi_direct[n] = num;
+		oi->oi_size += OSPFS_BLKSIZE; 
+	}
+	else if (n == OSPFS_NDIRECT)
 	{
 		allocated[0] = allocate_block();
-		if (allocated[0] == 0) return -ENOSPC;
-		allocated[1] = allocate_block();
-		if (allocated[1] == 0)
-		{
-			free_block(allocated[0]);
+		if (allocated[0] == 0) 
+		{	
+			free_block(num);
 			return -ENOSPC;
 		}
 		else
 		{
 			uint32_t* indblk = ospfs_block((uint32_t)allocated[0]);
-			uint32_t* newblk = ospfs_block((uint32_t)allocated[1]);
 			memset(indblk, 0, OSPFS_BLKSIZE);
-			memset(newblk, 0, OSPFS_BLKSIZE);
 			oi->oi_indirect = allocated[0];
 			oi->oi_size += OSPFS_BLKSIZE;
 			
@@ -745,47 +748,56 @@ add_block(ospfs_inode_t *oi)
 	}
 	else if (n > OSPFS_NDIRECT && n < OSPFS_NDIRECT + OSPFS_NINDIRECT)
 	{
-		uint32_t num;
-                if ((num = allocate_block()) == 0)
-                        return -ENOSPC;
-                else
-                {
-                        uint32_t* indblk = ospfs_block(oi->oi_indirect);
-			indblk[n-OSPFS_NDIRECT] = num;
-                        void* newblk = ospfs_block(num);
-                        memset(newblk,0,OSPFS_BLKSIZE);
-                        oi->oi_size += OSPFS_BLKSIZE;
-                }
+		uint32_t* indblk = ospfs_block(oi->oi_indirect);
+		indblk[direct_index(n)] = num;
+                oi->oi_size += OSPFS_BLKSIZE;
 	}
-	else if ( n == OSPFS_NDIRECT + OSPFS_NINDIRECT)
+	else 
 	{
-	        allocated[0] = allocate_block();
-		if (allocated[0] == 0) return -ENOSPC;
-                allocated[1] = allocate_block();
-		if (allocated[1] == 0)
+		if (n == OSPFS_NDIRECT + OSPFS_NINDIRECT)
 		{
-			free_block(allocated[0]);
-			return -ENOSPC;
+	        	allocated[0] = allocate_block();
+			if (allocated[0] == 0) 
+			{
+				free_block(num);
+				return -ENOSPC;
+			}
+			else
+			{
+				uint32_t* indblk2 = ospfs_block((uint32_t)allocated[0]);
+				memset(indblk2,0,OSPFS_BLKSIZE);
+				oi->oi_indirect2 = indblk2;
+			}
 		}
-		uint32_t num = allocate_block();
-                if (num == 0)
+		if ((n-OSPFS_NDIRECT-OSPFS_NINDIRECT)%OSPFS_NINDIRECT == 0)
 		{
-			free_block(allocated[0]);
-			free_block(allocated[1]);
-                        return -ENOSPC;
-		}
-                else
-                {
-                        uint32_t* indblk = ospfs_block((uint32_t)allocated[0]);
-                        uint32_t* newblk = ospfs_block((uint32_t)allocated[1]);
-                        memset(indblk, 0, OSPFS_BLKSIZE);
-                        memset(newblk, 0, OSPFS_BLKSIZE);
-                        oi->oi_indirect = allocated[0];
-                        oi->oi_size += OSPFS_BLKSIZE;
-
+			allocated[1] = allocate_block();
+			if (allocated[1] == 0)
+			{
+				free_block(num);
+				free_block(allocated[0]);
+				return -ENOSPC;
+			}
+			else
+			{
+				uint32_t* indblk = ospfs_block((uint32_t)allocated[1]);
+				memset(indblk, 0, OSPFS_BLKSIZE);
+                        	uint32_t* indblk2 = ospfs_block(oi->oi_indirect2);
+				indblk2[indir_index(n)] = indblk;
+			}
                 }
+		else
+		{	
+			uint32_t* indblk2 = ospfs_block(oi->oi_indirect2);
+			allocated[1] = indblk2[indir_index(n)];
+			
+		}
+		uint32_t* indblk = ospfs_block(allocated[1]);
+		indblk[(n-OSPFS_NDIRECT-OSPFS_NINDIRECT)%OSPFS_NINDIRECT] = num;
+		oi->oi_size += OSPFS_BLKSIZE;
 
 	}
+	return 0;
 }
 
 
@@ -816,9 +828,54 @@ remove_block(ospfs_inode_t *oi)
 {
 	// current number of blocks in file
 	uint32_t n = ospfs_size2nblocks(oi->oi_size);
-
-	/* EXERCISE: Your code here */
-	return -EIO; // Replace this line
+	if (n <= 0) return -EIO;
+	if (indir_index(n) == -1)
+	{
+		free_block(oi->oi_direct[n]);
+		oi->oi_direct[n] = 0;
+	}
+	else if (indir_index(n) == 0)
+	{
+		if (oi->oi_indirect <= 0) 
+			return -EIO;
+		else
+		{
+			uint32_t* indblk = ospfs_block(oi->oi_indirect);
+			free_block(indblk[direct_index(n)]);
+			indblk[direct_index(n)] = 0;
+			
+			if (n == OSPFS_NDIRECT+1)
+			{
+				free_block(oi->oi_indirect);
+				oi->oi_indirect = 0;
+			}
+		}
+	}
+	else
+	{
+		if (oi->oi_indirect2 <= 0)
+			return -EIO;
+		else
+		{
+			uint32_t* indblk2 = osfps_block(oi->oi_indirect2);
+			uint32_t* indblk = osfps_block(indblk2[indir_index(n)]);
+			free_block(indblk[direct_index(n)]);
+			indblk[direct_index(n)] = 0;
+			
+			if (direct_index(n) == 1)
+			{
+				free_block(indblk2[indir_index(n)]);
+				indblk2[indir_index(n)] = 0;
+			}
+			if (n == OSPFS_NDIRECT + OSPFS_NINDIRECT + 1)
+			{
+				free_block(oi->oi_indirect2);
+				oi->oi_indirect2 = 0;
+			}
+		}
+	}
+	oi->oi_size = (n-1) * OSPFS_BLKSIZE;
+	return 0;
 }
 
 

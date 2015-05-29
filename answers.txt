@@ -11,16 +11,17 @@
 # information you'd like us to know, please add it at the end of the file.
 
 # Partner 1
-Name: 
-Student ID: 
-Email: 
+Name: Jing Wu
+Student ID: 904-268-934
+Email: jianghu88tong@hotmail.com
 
 # Partner 2 (if you're working in a team)
-Name: 
-Student ID: 
-Email: 
+Name: Sichen Zhao 
+Student ID: 404-293-926
+Email: luxwig@ucla.edu
 
 # Extra credit problems
 #Extra credit problem: none
 
 # Add any other information you'd like us to know below this line.
+Pass all 17 tests. No major bugs occur

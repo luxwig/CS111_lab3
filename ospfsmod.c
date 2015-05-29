@@ -1222,7 +1222,7 @@ ospfs_link(struct dentry *src_dentry, struct inode *dir, struct dentry *dst_dent
 			      dst_dentry->d_name.len) != NULL) 
 		return -EEXIST;
 	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);	
-	ospfd_inode_t *src_inode = src_dentry->d_innode->i_ino;
+	ospfs_inode_t *src_inode = src_dentry->d_inode->i_ino;
 	ospfs_direntry_t *direntry = create_blank_direntry(dir_oi);
 	if (IS_ERR(direntry)) return PTR_ERR(direntry);
 }
@@ -1261,12 +1261,30 @@ ospfs_create(struct inode *dir, struct dentry *dentry, int mode, struct nameidat
 {
 	ospfs_inode_t *dir_oi = ospfs_inode(dir->i_ino);
 	uint32_t entry_ino = 0;
-	/* EXERCISE: Your code here. */
-	return -EINVAL; // Replace this line
-
-	/* Execute this code after your function has successfully created the
-	   file.  Set entry_ino to the created file's inode number before
-	   getting here. */
+	osps_inode_t *dir_oi = ospfs_inode(dir->i_ino);
+	ospfs_inode_t *file_oi = NULL;// step 1
+	ospfs_direntry_t * new_entry=NULL; // step2
+	uint32_t block_no = 0;
+	struct inode *i;
+	//error checking;
+	entry_ino = allocate_block();//find_free_inode();
+	if (entry_ino == 0)
+		return -ENOSPC;
+	file_oi = ospfs_inode(entry_ino);
+	if (file_oi== NULL){
+		return -EIO;
+	}
+	file_oi->oi_size = 0;
+	file_oi->oi_ftype = OSPFS_FTYPE_REG;
+	file_oi->oi_nlink = 1;
+	file_oi->oi_mode = mode;
+	new_entry = create_blank_direntry(dir_oi);
+	if (IS_ERR(new_entry)){
+		return PTR_ERR(new_entry);
+	}
+	new_entry->od_ino = entry_ino;
+	memcpy(new_entry->od_name, dentry->d_name.name,dentry->d_name.len);
+	new_entry->od_name[dentry->d_name.len] = '\0';
 	{
 		struct inode *i = ospfs_mk_linux_inode(dir->i_sb, entry_ino);
 		if (!i)
